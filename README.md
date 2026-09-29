@@ -39,6 +39,8 @@ You can add or remove any keywords through the extension popup.
 ```
 keyword-detector-extension/
 ├── manifest.json       # Extension configuration
+├── keywordMatcher.js   # Whole-word keyword matching
+├── notification.js     # On-page notification
 ├── content.js          # Content script for page scanning
 ├── popup.html          # Extension popup interface
 ├── popup.js            # Popup functionality
@@ -54,7 +56,7 @@ keyword-detector-extension/
 3. Click "Save Keywords"
 
 ### Modifying Detection Logic
-Edit `content.js` to change how keywords are detected or how notifications appear.
+Edit `keywordMatcher.js` to change how keywords are matched, `content.js` to change when the page is scanned, and `notification.js` to change how notifications appear.
 
 ### Changing the UI
 Edit `popup.html` and `popup.css` to customize the extension's appearance.

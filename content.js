@@ -1,110 +1,102 @@
-// Keywords to detect
-const keywords = ['red', 'blue'];
+const defaultKeywords = ['red', 'blue'];
+const scanDelayMs = 500;
+const maxWaitMs = 3000;
 
-// Function to check if keywords exist in page text
-function checkForKeywords() {
-  const pageText = document.body.innerText.toLowerCase();
-  const foundKeywords = [];
-  
-  keywords.forEach(keyword => {
-    if (pageText.includes(keyword.toLowerCase())) {
-      foundKeywords.push(keyword);
-    }
-  });
-  
-  if (foundKeywords.length > 0) {
-    // Send message to background script
+let keywords = defaultKeywords;
+let lastFoundKey = '';
+let scanTimer = null;
+let firstRequestAt = 0;
+
+function getPageText() {
+  return document.body.innerText.replace(getNotificationText(), '');
+}
+
+function findKeywordsOnPage(keywordList) {
+  return findKeywordsInText(keywordList, getPageText());
+}
+
+function notifyBackground(foundKeywords) {
+  try {
     chrome.runtime.sendMessage({
       type: 'KEYWORDS_FOUND',
       keywords: foundKeywords,
       url: window.location.href
-    });
-    
-    // Create a simple notification popup on the page
-    showPageNotification(foundKeywords);
+    }).catch(() => {});
+  } catch (error) {
+    return;
   }
 }
 
-// Function to show a notification on the page
-function showPageNotification(keywords) {
-  // Remove existing notification if present
-  const existingNotification = document.getElementById('keyword-detector-notification');
-  if (existingNotification) {
-    existingNotification.remove();
+function scanPage() {
+  const foundKeywords = findKeywordsOnPage(keywords);
+  const foundKey = foundKeywords.join('|');
+  if (foundKey === lastFoundKey) return;
+  lastFoundKey = foundKey;
+
+  if (foundKeywords.length > 0) {
+    notifyBackground(foundKeywords);
+    showNotification(foundKeywords);
+  } else {
+    removeNotification();
   }
-  
-  // Create notification element
-  const notification = document.createElement('div');
-  notification.id = 'keyword-detector-notification';
-  notification.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 15px 20px;
-    border-radius: 8px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-    z-index: 10000;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 14px;
-    max-width: 300px;
-    animation: slideIn 0.3s ease-out;
-  `;
-  
-  notification.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: space-between;">
-      <div>
-        <strong>🔍 Keywords Found!</strong><br>
-        <span style="opacity: 0.9;">Detected: ${keywords.join(', ')}</span>
-      </div>
-      <button onclick="this.parentElement.parentElement.remove()" style="
-        background: none;
-        border: none;
-        color: white;
-        font-size: 18px;
-        cursor: pointer;
-        margin-left: 10px;
-      ">×</button>
-    </div>
-  `;
-  
-  // Add animation
-  const style = document.createElement('style');
-  style.textContent = `
-    @keyframes slideIn {
-      from {
-        transform: translateX(100%);
-        opacity: 0;
-      }
-      to {
-        transform: translateX(0);
-        opacity: 1;
-      }
-    }
-  `;
-  document.head.appendChild(style);
-  
-  // Add to page
-  document.body.appendChild(notification);
-  
-  // Auto-remove after 5 seconds
-  setTimeout(() => {
-    if (notification.parentElement) {
-      notification.remove();
-    }
-  }, 5000);
 }
 
-// Run check when page loads
-checkForKeywords();
+function scheduleScan() {
+  const now = Date.now();
+  if (scanTimer === null) {
+    firstRequestAt = now;
+  }
+  clearTimeout(scanTimer);
 
-// Also check when page content changes (for dynamic content)
+  const timeUntilMaxWait = firstRequestAt + maxWaitMs - now;
+  const delay = Math.max(0, Math.min(scanDelayMs, timeUntilMaxWait));
+  scanTimer = setTimeout(() => {
+    scanTimer = null;
+    scanPage();
+  }, delay);
+}
+
+function isOwnMutation(mutation) {
+  const target = mutation.target.nodeType === Node.ELEMENT_NODE
+    ? mutation.target
+    : mutation.target.parentElement;
+  if (isNotificationNode(target)) return true;
+
+  const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+  return changedNodes.length > 0 && changedNodes.every(isNotificationNode);
+}
+
+chrome.storage.sync.get(['keywords'], (result) => {
+  if (Array.isArray(result.keywords)) {
+    keywords = result.keywords;
+  }
+  scheduleScan();
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'sync' && changes.keywords) {
+    const savedKeywords = changes.keywords.newValue;
+    keywords = Array.isArray(savedKeywords) ? savedKeywords : defaultKeywords;
+    lastFoundKey = null;
+    scheduleScan();
+  }
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'GET_FOUND_KEYWORDS') {
+    const keywordList = Array.isArray(message.keywords) ? message.keywords : keywords;
+    sendResponse({keywords: findKeywordsOnPage(keywordList)});
+  }
+});
+
 const observer = new MutationObserver((mutations) => {
-  checkForKeywords();
+  if (mutations.some((mutation) => !isOwnMutation(mutation))) {
+    scheduleScan();
+  }
 });
 
 observer.observe(document.body, {
   childList: true,
-  subtree: true
+  subtree: true,
+  characterData: true
 });

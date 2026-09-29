@@ -1,15 +1,10 @@
-// Default keywords
 const defaultKeywords = ['red', 'blue'];
 
-// Initialize popup
 document.addEventListener('DOMContentLoaded', function() {
   loadKeywords();
-  checkCurrentPage();
-  
-  // Save keywords button
+
   document.getElementById('save-keywords').addEventListener('click', saveKeywords);
-  
-  // Enter key in input field
+
   document.getElementById('keyword-input').addEventListener('keypress', function(e) {
     if (e.key === 'Enter') {
       saveKeywords();
@@ -17,89 +12,82 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 
-// Load keywords from storage
 function loadKeywords() {
   chrome.storage.sync.get(['keywords'], function(result) {
     const keywords = result.keywords || defaultKeywords;
     document.getElementById('keyword-input').value = keywords.join(', ');
+    checkCurrentPage(keywords);
   });
 }
 
-// Save keywords to storage
-function saveKeywords() {
+function readKeywordInput() {
   const input = document.getElementById('keyword-input').value;
-  const keywords = input.split(',').map(k => k.trim()).filter(k => k.length > 0);
-  
+  return input.split(',').map(k => k.trim()).filter(k => k.length > 0);
+}
+
+function showSavedFeedback() {
+  const button = document.getElementById('save-keywords');
+  const originalText = button.textContent;
+  button.textContent = '✓ Saved!';
+  button.style.background = 'rgba(76, 175, 80, 0.5)';
+
+  setTimeout(() => {
+    button.textContent = originalText;
+    button.style.background = 'rgba(255, 255, 255, 0.3)';
+  }, 1500);
+}
+
+function saveKeywords() {
+  const keywords = readKeywordInput();
+
   chrome.storage.sync.set({keywords: keywords}, function() {
-    // Show success feedback
-    const button = document.getElementById('save-keywords');
-    const originalText = button.textContent;
-    button.textContent = '✓ Saved!';
-    button.style.background = 'rgba(76, 175, 80, 0.5)';
-    
-    setTimeout(() => {
-      button.textContent = originalText;
-      button.style.background = 'rgba(255, 255, 255, 0.3)';
-    }, 1500);
-    
-    // Refresh content script on current tab
-    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-      chrome.tabs.reload(tabs[0].id);
-    });
+    showSavedFeedback();
+    checkCurrentPage(keywords);
   });
 }
 
-// Check current page for keywords
-function checkCurrentPage() {
+function checkCurrentPage(keywords) {
   chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
     const currentTab = tabs[0];
-    
-    // Get page content and check for keywords
-    chrome.scripting.executeScript({
-      target: {tabId: currentTab.id},
-      function: checkPageForKeywords
-    }, (results) => {
-      if (results && results[0]) {
-        displayResults(results[0].result, currentTab.url);
+    const message = {type: 'GET_FOUND_KEYWORDS', keywords: keywords};
+
+    chrome.tabs.sendMessage(currentTab.id, message, function(response) {
+      if (chrome.runtime.lastError || !response) {
+        displayMessage('Reload this page to scan it', currentTab.url);
+        return;
       }
+      displayResults(response.keywords, currentTab.url);
     });
   });
 }
 
-// Function to be injected into the page
-function checkPageForKeywords() {
-  return new Promise((resolve) => {
-    chrome.storage.sync.get(['keywords'], function(result) {
-      const keywords = result.keywords || ['red', 'blue'];
-      const pageText = document.body.innerText.toLowerCase();
-      const foundKeywords = [];
-      
-      keywords.forEach(keyword => {
-        if (pageText.includes(keyword.toLowerCase())) {
-          foundKeywords.push(keyword);
-        }
-      });
-      
-      resolve(foundKeywords);
-    });
-  });
-}
-
-// Display results in popup
-function displayResults(keywords, url) {
-  const keywordList = document.getElementById('keyword-list');
+function displayCurrentPage(url) {
   const currentPage = document.getElementById('current-page');
-  
-  // Show current page (truncated)
-  const domain = new URL(url).hostname;
+  const domain = url ? new URL(url).hostname : '';
   currentPage.textContent = `Current page: ${domain}`;
-  
-  // Display keywords
-  if (keywords.length > 0) {
-    keywordList.innerHTML = keywords.map(keyword => 
-      `<span class="keyword-tag">${keyword}</span>`
-    ).join('');
-  } else {
-    keywordList.innerHTML = '<div class="no-keywords">No keywords found on this page</div>';
+}
+
+function createListItem(tagName, className, text) {
+  const item = document.createElement(tagName);
+  item.className = className;
+  item.textContent = text;
+  return item;
+}
+
+function displayMessage(text, url) {
+  displayCurrentPage(url);
+  const keywordList = document.getElementById('keyword-list');
+  keywordList.replaceChildren(createListItem('div', 'no-keywords', text));
+}
+
+function displayResults(keywords, url) {
+  if (keywords.length === 0) {
+    displayMessage('No keywords found on this page', url);
+    return;
   }
+
+  displayCurrentPage(url);
+  const keywordList = document.getElementById('keyword-list');
+  const keywordTags = keywords.map(keyword => createListItem('span', 'keyword-tag', keyword));
+  keywordList.replaceChildren(...keywordTags);
 }
